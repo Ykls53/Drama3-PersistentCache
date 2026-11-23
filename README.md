@@ -384,3 +384,46 @@ No extra work needed.
 node, opening **80 categorised tags** (basic emotions 12 / advanced 37 / tone 14 /
 vocal 11 / effects 6), appended to the script on click. Tag list extracted from
 Drama3-Studio.
+---
+
+## v6 Correction (important)
+
+The v4 fix **never actually ran** — the guard was wrong:
+
+```python
+if free >= need_bytes:   # get_free_memory counts reclaimable cache as free
+    return               # so this returned early and the release code never ran
+```
+
+### Correct approach
+
+Do not trust `get_free_memory`; **check whether the codec's parameters are really on the GPU**:
+
+```python
+def _codec_fully_loaded(codec):
+    """True when every codec parameter is on load_device (nothing offloaded to CPU)."""
+    dev = codec.patcher.load_device
+    for param in codec.patcher.model.parameters():
+        if param.device.type != dev.type:
+            return False
+    return True
+
+def _free_for_codec(codec, need_bytes):
+    if _codec_fully_loaded(codec):
+        return                      # already fully on the GPU
+    comfy.model_management.free_memory(need_bytes, codec.patcher.load_device)
+    for store in _ACTIVE_STORES:    # drop the persistent cache; it rebuilds next generation
+        store.cache = None
+    comfy.model_management.soft_empty_cache()
+```
+
+### Measured (RTX 5070 Ti 16GB)
+
+| Test | v4 | v6 |
+|---|---|---|
+| Long script (7 tags, ~200 chars) | FAILED | OK, 54.2 s |
+| Short line | FAILED | OK, 24.1 s |
+
+### Another trap: restart after editing
+
+Python caches loaded modules. **Without a server restart you are still running the old code** — that is why v4 produced not a single release log line.

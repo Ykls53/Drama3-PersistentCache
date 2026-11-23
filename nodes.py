@@ -600,6 +600,18 @@ def decode(codec, codes, gap=0.0):
     return torch.cat([piece for take in audio for piece in (silence, take)][1:], -1)
 
 
+def _codec_fully_loaded(codec):
+    """codec 的参数是否全部在 load_device 上（没有 offload 回 CPU 的）。"""
+    try:
+        dev = codec.patcher.load_device
+        for param in codec.patcher.model.parameters():
+            if param.device.type != dev.type:
+                return False
+        return True
+    except Exception:
+        return False
+
+
 def _free_for_codec(codec, need_bytes):
     """大肥鱼改：确保 codec 能整块进显存。
 
@@ -610,11 +622,12 @@ def _free_for_codec(codec, need_bytes):
     try:
         free = comfy.model_management.get_free_memory(codec.patcher.load_device)
     except Exception:
-        return
-    if free >= need_bytes:
-        return
-    logging.info("Drama 3: 显存不足为解码器（需 %.0f MB，余 %.0f MB），先腾显存",
+        free = 0
+    logging.info("Drama 3: 解码前检查 —— 需要 %.0f MB，ComfyUI 报空闲 %.0f MB",
                  need_bytes / 1024 ** 2, free / 1024 ** 2)
+    # 大肥鱼改：不能只信 get_free_memory（它可能把可回收的缓存算作空闲），
+    # 常驻专家缓存会实际占着显存。只要 codec 还没完整加载，就先清一次专家缓存。
+    codec_loaded = _codec_fully_loaded(codec)
     # 让 ComfyUI 按需要腾显存：会卸载其他模型、触发各自的 offload
     try:
         comfy.model_management.free_memory(need_bytes, codec.patcher.load_device)

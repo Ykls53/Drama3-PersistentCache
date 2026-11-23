@@ -361,3 +361,46 @@ class ExpertStore:
 `web/drama3_tag_panel.js` 给 `Drama3Generate` 节点加了一个「🏷 插入情绪标签」按钮，
 点开是 **80 个分类标签**（基础情绪 12 / 进阶情绪 37 / 声音语气 14 / 人声 11 / 音效停顿 6），
 点一下追加到台词末尾。标签表提取自 Drama3-Studio。
+---
+
+## v6 更正（重要）
+
+v4 的修复**没有真正生效**，原因是判断条件写错了：
+
+```python
+if free >= need_bytes:   # ← get_free_memory 把可回收缓存也算作空闲
+    return               # ← 于是永远提前返回，释放逻辑从不执行
+```
+
+### 正确做法
+
+不看 `get_free_memory`，**直接检查 codec 的参数是否真在 GPU 上**：
+
+```python
+def _codec_fully_loaded(codec):
+    """codec 的参数是否全部在 load_device 上（没有 offload 回 CPU 的）。"""
+    dev = codec.patcher.load_device
+    for param in codec.patcher.model.parameters():
+        if param.device.type != dev.type:
+            return False
+    return True
+
+def _free_for_codec(codec, need_bytes):
+    if _codec_fully_loaded(codec):
+        return                      # 已经全在 GPU，不用动
+    comfy.model_management.free_memory(need_bytes, codec.patcher.load_device)
+    for store in _ACTIVE_STORES:    # 清常驻专家缓存，下次生成会重建
+        store.cache = None
+    comfy.model_management.soft_empty_cache()
+```
+
+### 实测（RTX 5070 Ti 16GB）
+
+| 测试 | v4 | v6 |
+|---|---|---|
+| 长台词（含 7 个标签，约 200 字） | ❌ 解码失败 | ✅ 54.2 s |
+| 短句 | ❌ | ✅ 24.1 s |
+
+### 还有一个坑：改完必须重启
+
+Python 模块加载到内存后不会重读文件。**改完代码不重启服务，跑的还是旧逻辑** —— v4 那次就是因为这个，日志里连一行释放记录都没有。

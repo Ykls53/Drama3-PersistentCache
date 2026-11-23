@@ -274,3 +274,90 @@ for layer_i, layer in enumerate(model.model.layers):
 
 跟随上游项目。原创部分 MIT；`codec.py` 等改编自 Fish Speech 的部分
 遵循 Fish Audio Community License。
+
+---
+
+## v4 更新（2026-11-23）：解码器显存修复
+
+### 问题：长语音解码失败
+
+```
+RuntimeError: Expected all tensors to be on the same device,
+but found at least two devices, cuda:0 and cpu!
+```
+
+日志里能看到关键一行：
+
+```
+loaded partially; 1426.85 MB usable, 1414.85 MB loaded,
+77.80 MB offloaded
+```
+
+**codec 只差 78 MB 装不进显存，被 offload 回 CPU**，于是模型参数一半在 GPU 一半在 CPU。
+
+### 根因
+
+常驻专家缓存会把显存吃满（这是性能优化的目的），但 `Drama3Decode` 需要完整加载 1.5 GB 的 codec。
+ComfyUI 的 `load_models_gpu` 在显存不足时只加载一部分，不报错，直到前向计算时才炸。
+
+**长语音时更严重**：`DECODE_FRAME_BYTES = 5.3 MB/帧`，长 take 的 window 更大，需要的显存更多。
+
+### 修复
+
+**`nodes.py` — decode 前主动腾显存**
+
+```python
+def decode(codec, codes, gap=0.0):
+    ...
+    need = window * DECODE_FRAME_BYTES
+    _free_for_codec(codec, need)          # 新增
+    comfy.model_management.load_models_gpu([codec.patcher], memory_required=need)
+    ...
+```
+
+```python
+def _free_for_codec(codec, need_bytes):
+    """确保 codec 能整块进显存。不够就按需要卸载别人的模型。"""
+    free = comfy.model_management.get_free_memory(codec.patcher.load_device)
+    if free >= need_bytes:
+        return
+    comfy.model_management.free_memory(need_bytes, codec.patcher.load_device)
+    # 常驻专家缓存不会自己让位，显式清掉（下次生成会重建，热表还在）
+    from .drama3.offload import _ACTIVE_STORES
+    for store in _ACTIVE_STORES:
+        if getattr(store, "cache", None) is not None:
+            store.cache = None
+    comfy.model_management.soft_empty_cache()
+```
+
+**`drama3/offload.py` — 登记活跃实例**
+
+```python
+_ACTIVE_STORES = []        # 新增，供 nodes.py 找到要释放的缓存
+
+class ExpertStore:
+    def __init__(...):
+        ...
+        _ACTIVE_STORES.append(self)   # 新增
+```
+
+### 效果
+
+| 测试 | 修复前 | 修复后 |
+|---|---|---|
+| 短句（2 句） | ✅ | ✅ 40.7s |
+| **长句（120 字，自动拆分）** | ❌ 解码失败 | ✅ 92.2s |
+| 长句第二次 | ❌ | ✅ **22.1s** |
+
+**不需要 `--reserve-vram` 了**，代码自己腾。
+
+### 顺带说明：自动拆分/合并本来就存在
+
+`split_long_text=True`（默认开）会让长文本按 **300 字节（约 100 汉字）** 自动切块，
+每块带上一块上下文生成，最后自动拼接。不用额外做。
+
+## 附带：中文情绪标签面板
+
+`web/drama3_tag_panel.js` 给 `Drama3Generate` 节点加了一个「🏷 插入情绪标签」按钮，
+点开是 **80 个分类标签**（基础情绪 12 / 进阶情绪 37 / 声音语气 14 / 人声 11 / 音效停顿 6），
+点一下追加到台词末尾。标签表提取自 Drama3-Studio。

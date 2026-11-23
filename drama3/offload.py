@@ -301,6 +301,10 @@ class CpuSide:
         return kernels.await_cpu(plan, self.flag[layer:layer + 1], step, self.result[layer], AWAIT_US, took_over)
 
 
+# 大肥鱼改：登记活跃的 ExpertStore，供 nodes.py 的 decode 在显存不足时释放缓存。
+_ACTIVE_STORES = []
+
+
 class ExpertStore:
     def __init__(self, cache_bytes, pin):
         """`cache_bytes` 0 sizes the expert cache to the VRAM free when a generation starts. `pin` keeps the banks in
@@ -330,6 +334,7 @@ class ExpertStore:
         self._pin_budget = None
         self._pinned_bytes = 0
         self._pin_exhausted = False
+        _ACTIVE_STORES.append(self)
 
     def add(self, experts):
         """Take a layer's experts into host memory; returns the module that replaces it in the model."""

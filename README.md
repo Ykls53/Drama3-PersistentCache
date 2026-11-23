@@ -290,3 +290,97 @@ for layer_i, layer in enumerate(model.model.layers):
 
 Follows the upstream project. Original work MIT; `codec.py` and other parts
 adapted from Fish Speech remain under the Fish Audio Community License.
+
+---
+
+## v4 Update (2026-11-23): Decoder VRAM Fix
+
+### Problem: long audio fails to decode
+
+```
+RuntimeError: Expected all tensors to be on the same device,
+but found at least two devices, cuda:0 and cpu!
+```
+
+The log shows the cause:
+
+```
+loaded partially; 1426.85 MB usable, 1414.85 MB loaded,
+77.80 MB offloaded
+```
+
+**The codec missed VRAM by 78 MB, so part of it was offloaded to CPU** —
+leaving model parameters split across GPU and CPU.
+
+### Root cause
+
+The persistent expert cache fills VRAM by design (that is the optimisation),
+but `Drama3Decode` needs the whole 1.5 GB codec resident.
+ComfyUI's `load_models_gpu` loads partially without error when VRAM is short,
+and the failure only surfaces at the first forward pass.
+
+**Long takes are worse**: `DECODE_FRAME_BYTES = 5.3 MB/frame`, so a longer
+window needs more VRAM.
+
+### Fix
+
+**`nodes.py` — free VRAM before decoding**
+
+```python
+def decode(codec, codes, gap=0.0):
+    ...
+    need = window * DECODE_FRAME_BYTES
+    _free_for_codec(codec, need)          # added
+    comfy.model_management.load_models_gpu([codec.patcher], memory_required=need)
+    ...
+```
+
+```python
+def _free_for_codec(codec, need_bytes):
+    """Make sure the codec fits in VRAM as one piece."""
+    free = comfy.model_management.get_free_memory(codec.patcher.load_device)
+    if free >= need_bytes:
+        return
+    comfy.model_management.free_memory(need_bytes, codec.patcher.load_device)
+    # The persistent expert cache will not yield on its own; drop it
+    # (it rebuilds next generation, the warm table survives)
+    from .drama3.offload import _ACTIVE_STORES
+    for store in _ACTIVE_STORES:
+        if getattr(store, "cache", None) is not None:
+            store.cache = None
+    comfy.model_management.soft_empty_cache()
+```
+
+**`drama3/offload.py` — registry of live instances**
+
+```python
+_ACTIVE_STORES = []        # added; lets nodes.py find caches to release
+
+class ExpertStore:
+    def __init__(...):
+        ...
+        _ACTIVE_STORES.append(self)   # added
+```
+
+### Results
+
+| Test | Before | After |
+|---|---|---|
+| Short (2 lines) | OK | OK, 40.7 s |
+| **Long (120 chars, auto-split)** | FAILED | OK, 92.2 s |
+| Long, second run | FAILED | **22.1 s** |
+
+**`--reserve-vram` is no longer needed** — the code frees VRAM itself.
+
+### Note: auto split/merge already exists
+
+`split_long_text=True` (the default) chunks long text at **300 bytes (~100 Chinese
+characters)**, carries context between chunks, and concatenates the result.
+No extra work needed.
+
+## Bonus: Chinese emotion tag panel
+
+`web/drama3_tag_panel.js` adds a "🏷 插入情绪标签" button to the `Drama3Generate`
+node, opening **80 categorised tags** (basic emotions 12 / advanced 37 / tone 14 /
+vocal 11 / effects 6), appended to the script on click. Tag list extracted from
+Drama3-Studio.

@@ -54,10 +54,33 @@ AWAIT_US = 5000
 
 
 def pinned(tensor, pin):
+    """把张量放进锁页内存（CUDA kernel 能直接读）。
+
+    大肥鱼改：加 OOM 保护。
+    Windows 上 pin_memory=True 会向 CUDA 申请一块锁页池，显存不够时直接抛
+    "CUDA error: out of memory"，整个模型加载就崩了。
+    这里先试 pin，失败了退回普通内存 —— 慢一点，但能跑完。
+    """
     if not pin:
         return tensor.contiguous()
-    out = torch.empty(tensor.shape, dtype=tensor.dtype, pin_memory=True)
-    return out.copy_(tensor)
+    try:
+        out = torch.empty(tensor.shape, dtype=tensor.dtype, pin_memory=True)
+        return out.copy_(tensor)
+    except (RuntimeError, torch.cuda.OutOfMemoryError) as exc:
+        msg = str(exc)
+        if "out of memory" in msg.lower() or "OutOfMemory" in type(exc).__name__:
+            global _PIN_FALLBACK_WARNED
+            if not _PIN_FALLBACK_WARNED:
+                _PIN_FALLBACK_WARNED = True
+                logging.warning(
+                    "Drama 3: 锁页内存分配失败（显存不够），本次退回普通内存。"
+                    "速度会慢一些，但不会崩。建议关掉其他占显存的程序后重启。")
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+            return tensor.contiguous()
+        raise
 
 
 def tensor_fields(weight):

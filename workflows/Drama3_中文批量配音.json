@@ -1,0 +1,431 @@
+{
+  "last_node_id": 20,
+  "last_link_id": 30,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "MarkdownNote",
+      "pos": [
+        -420,
+        100
+      ],
+      "size": [
+        380,
+        620
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "## 中文批量配音 · 大肥鱼版\n\n**用法**：\n1. 把参考音频（10-20秒干净人声）丢进 ComfyUI 的 `input` 目录\n2. 节点 4 选它，`trim` 保持开\n3. 节点 5 填**参考音频里实际说的每个字**（必须逐字一致，差一个字音色就漂）\n4. 节点 6 写台词，**一行一句**\n5. 第一次跑完，节点 12 会存下音色文件\n\n**之后复用音色**：\n- 删掉节点 4、5、12\n- 换成「加载 Drama 3 音色」节点，接 Generate 的 voices\n- 省掉编码、音色更稳\n\n---\n\n## 中文台词必须避开\n\n- ❌ 行首 `……` → **整句被跳过**\n- ❌ 圆括号 `（心理活动）` → **会被念出来**\n- ❌ `<|im_start|>` 等结构 token → 直接报错\n\n## 推荐的标签写法\n\n**风格前缀**（行首，管整句）：\n```\n[沙哑低沉，语速偏慢] 你终于来了。\n[强压怒气，每个字咬得很死] 我等你三个小时了。\n```\n\n**点标签**（句中，那个位置响一声）：\n```\n好吧 [叹气] 那就这样吧。\n真的吗 [笑] 太好了。\n```\n\n**成对标签**（只改局部几个字）：\n```\n<whisper>我告诉你一个秘密</whisper>，别跟人说。\n```\n\n**多人对话**：\n```\n<|speaker:0|>[试探地] 你昨晚是不是没睡？\n<|speaker:1|>[故作轻松] 睡得挺好。\n```\n\n---\n\n## 参数（已调好，别动）\n\n| 参数 | 值 | 原因 |\n|---|---|---|\n| temperature | 1.0 | 降低会更慢更平更易静音 |\n| top_p | 0.9 | 低于 0.9 会变平 |\n| top_k | 0 | **30 会导致大量静音** |\n| lines_at_once | 8 | 实测最快，比单句快 2.6 倍 |\n\n## 速度参考（RTX 5070 Ti 16GB）\n\n约 37 秒出 8 句、16 秒音频。\n批量越大越划算——固定开销被摊薄。"
+      ]
+    },
+    {
+      "id": 2,
+      "type": "Drama3Loader",
+      "pos": [
+        40,
+        100
+      ],
+      "size": [
+        400,
+        180
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "DRAMA3_MODEL",
+          "links": [
+            1,
+            2
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {},
+      "widgets_values": [
+        "drama3\\drama3_fp8experts_bf16.safetensors",
+        "in RAM",
+        0,
+        "none",
+        0,
+        true
+      ]
+    },
+    {
+      "id": 3,
+      "type": "Drama3CodecLoader",
+      "pos": [
+        40,
+        340
+      ],
+      "size": [
+        400,
+        60
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "codec",
+          "type": "DRAMA3_CODEC",
+          "links": [
+            3,
+            4
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {},
+      "widgets_values": [
+        "drama3vae\\drama3_codec.safetensors"
+      ]
+    },
+    {
+      "id": 4,
+      "type": "Drama3LoadReferenceAudio",
+      "pos": [
+        40,
+        450
+      ],
+      "size": [
+        400,
+        120
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "links": [
+            5
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {},
+      "widgets_values": [
+        "",
+        true,
+        "20 s"
+      ]
+    },
+    {
+      "id": 5,
+      "type": "Drama3EncodeVoice",
+      "pos": [
+        480,
+        450
+      ],
+      "size": [
+        400,
+        180
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "link": 5
+        }
+      ],
+      "outputs": [
+        {
+          "name": "voice",
+          "type": "DRAMA3_VOICE",
+          "links": [
+            6,
+            7
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {},
+      "widgets_values": [
+        ""
+      ]
+    },
+    {
+      "id": 6,
+      "type": "Drama3SpeedOptions",
+      "pos": [
+        480,
+        100
+      ],
+      "size": [
+        400,
+        90
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "DRAMA3_MODEL",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "DRAMA3_MODEL",
+          "links": [
+            8
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {},
+      "widgets_values": [
+        4,
+        false
+      ]
+    },
+    {
+      "id": 7,
+      "type": "Drama3Generate",
+      "pos": [
+        920,
+        100
+      ],
+      "size": [
+        480,
+        420
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "DRAMA3_MODEL",
+          "link": 8
+        },
+        {
+          "name": "voices",
+          "type": "DRAMA3_VOICE",
+          "link": 6
+        }
+      ],
+      "outputs": [
+        {
+          "name": "codes",
+          "type": "DRAMA3_CODES",
+          "links": [
+            9
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {},
+      "widgets_values": [
+        "[沙哑低沉，语速偏慢] 你终于来了。\n[强压着怒气，音量不大但每个字都咬得很死] 我等你三个小时了。\n[忽然笑了一声，笑得很难听] 外面下雨。\n[沉默两秒后，声音突然软下来] ……伞我带了。",
+        1,
+        "randomize",
+        1,
+        0.9,
+        0,
+        0,
+        true,
+        "one take per line",
+        0.0
+      ]
+    },
+    {
+      "id": 8,
+      "type": "Drama3Decode",
+      "pos": [
+        1440,
+        100
+      ],
+      "size": [
+        300,
+        90
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "codes",
+          "type": "DRAMA3_CODES",
+          "link": 9
+        },
+        {
+          "name": "codec",
+          "type": "DRAMA3_CODEC",
+          "link": 3
+        }
+      ],
+      "outputs": [
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "links": [
+            10
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {},
+      "widgets_values": [
+        true
+      ]
+    },
+    {
+      "id": 9,
+      "type": "SaveAudio",
+      "pos": [
+        1780,
+        100
+      ],
+      "size": [
+        360,
+        120
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "link": 10
+        }
+      ],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "drama3/chinese_batch"
+      ]
+    },
+    {
+      "id": 12,
+      "type": "Drama3SaveVoice",
+      "pos": [
+        480,
+        680
+      ],
+      "size": [
+        400,
+        100
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "voice",
+          "type": "DRAMA3_VOICE",
+          "link": 7
+        }
+      ],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "my_chinese_voice"
+      ]
+    }
+  ],
+  "links": [
+    [
+      1,
+      2,
+      0,
+      6,
+      0,
+      "DRAMA3_MODEL"
+    ],
+    [
+      2,
+      3,
+      0,
+      8,
+      1,
+      "DRAMA3_CODEC"
+    ],
+    [
+      3,
+      3,
+      0,
+      8,
+      1,
+      "DRAMA3_CODEC"
+    ],
+    [
+      4,
+      3,
+      0,
+      8,
+      1,
+      "DRAMA3_CODEC"
+    ],
+    [
+      5,
+      4,
+      0,
+      5,
+      0,
+      "AUDIO"
+    ],
+    [
+      6,
+      5,
+      0,
+      7,
+      1,
+      "DRAMA3_VOICE"
+    ],
+    [
+      7,
+      5,
+      0,
+      12,
+      0,
+      "DRAMA3_VOICE"
+    ],
+    [
+      8,
+      6,
+      0,
+      7,
+      0,
+      "DRAMA3_MODEL"
+    ],
+    [
+      9,
+      7,
+      0,
+      8,
+      0,
+      "DRAMA3_CODES"
+    ],
+    [
+      10,
+      8,
+      0,
+      9,
+      0,
+      "AUDIO"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}

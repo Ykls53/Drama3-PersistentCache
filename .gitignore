@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.venv/
+venv/
+
+# Backups
+*.bak
+*.bak-*
+*.orig
+
+# ComfyUI output
+output/
+temp/
+input/
+user/
+
+# Models (never commit weights)
+*.safetensors
+*.pth
+*.ckpt
+*.gguf
+!drama3/fish/line_head.safetensors
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log

@@ -427,3 +427,71 @@ def _free_for_codec(codec, need_bytes):
 ### Another trap: restart after editing
 
 Python caches loaded modules. **Without a server restart you are still running the old code** — that is why v4 produced not a single release log line.
+---
+
+## Line Helper (v7)
+
+`web/drama3_tag_panel.js` adds a "🏷 台词助手（标签 / 拼音）" button to the `Drama3Generate` node.
+
+### Grouped by the three official syntaxes
+
+Fish Audio's reference states directions are **free natural language with no fixed list**,
+but the syntax falls into three kinds:
+
+| Kind | Syntax | Reach | Panel group |
+|---|---|---|---|
+| Point cue | `[cue]` | **fires once at that spot** | Point tags (15) |
+| Scoped cue | `<cue>...</cue>` | **shapes only the wrapped words** | Scoped tags (7) |
+| Director's note | free description | whole line | Mood (16) |
+
+**This is the trap most people hit**: `[Whisper]` at the start of a line is a *point cue* —
+it whispers once at that spot and stops. For a whole line in a whisper you need
+`<whisper>...</whisper>` around it.
+
+### Ergonomics
+
+1. **Inserts at the caret**, not appended to the end
+2. **Select text then click a scoped tag — it wraps the selection**; with nothing
+   selected it inserts an empty pair
+3. **Mood tags jump to the start of the current line**
+4. **Focus returns to the textarea with the caret after the insertion** — click repeatedly
+5. **Search box on top and auto-focused**; matches Chinese names or the English cue
+6. **Pinyin validation by character count** — 2 characters with 3 syllables is rejected
+
+### Example: whole line whispered, calm first half, questioning second half
+
+```
+<whisper>[平静] 主人，这是测试音色。[Curious] 你觉得如何？</whisper>
+```
+
+### Pinyin correction
+
+1. Select the characters to fix (e.g. 重要)
+2. Type one syllable per character, space separated: `zhong4 yao4`
+3. Click 应用 or press Enter
+
+Result:
+```
+<|phoneme_start|>zhong4<|phoneme_end|><|phoneme_start|>yao4<|phoneme_end|>的事情。
+```
+
+Rules (official): lowercase pinyin, tone digit at the end of each syllable (`ma1`–`ma5`,
+5 is neutral), punctuation outside the tags.
+
+### A bug worth recording
+
+The first version did nothing on click: the selection was only saved while the textarea
+had focus, but focusing leaves it the moment you click a button, so the saved selection
+stayed `[0,0]`.
+
+Reading the textarea's own `selectionStart` **unconditionally** fixed it — a textarea
+keeps its selection even when blurred.
+
+### Measured
+
+| Action | Result |
+|---|---|
+| Point tag | `你好世界这 [sighs] 是一个测试句子。` OK, at the caret |
+| Scoped tag | `这是一<whisper>句悄</whisper>悄话。` OK, wrapped exactly the 2 selected chars |
+| Mood | `[愤怒] 第二行台词。` OK, jumped to line start |
+| Pinyin | `<|phoneme_start|>zhong4<|phoneme_end|>...` OK |

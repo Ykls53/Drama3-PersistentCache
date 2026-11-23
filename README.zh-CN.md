@@ -469,3 +469,76 @@ Python 模块加载到内存后不会重读文件。**改完代码不重启服�
 | 范围标签 | `这是一<whisper>句悄</whisper>悄话。` ✅ 正好包住选中的 2 字 |
 | 整体情绪 | `[愤怒] 第二行台词。` ✅ 自动跳到行首 |
 | 拼音纠音 | `<|phoneme_start|>zhong4<|phoneme_end|>...` ✅ 逐字打标 |
+---
+
+## v8：稳定性修复（重要）
+
+### 问题：生成时报「GPU 显存不足」
+
+```
+torch.AcceleratorError: CUDA error: out of memory
+  load_drama3 → add_from_tensors → pinned()
+                              → torch.empty(pin_memory=True)
+```
+
+**崩溃点在模型加载**，不是推理。原因是 `pin_memory=True` 会向 CUDA 申请锁页池，
+显存被别的进程占着时直接抛 OOM，整个加载就崩了。
+
+### 根因：ComfyUI 没有单实例锁
+
+重复启动会同时跑起多个实例，每个都想吃满显存，互相抢就会崩。
+
+**症状识别**（不用看任务管理器）：专用显存很低（2-3 GB），共享显存却接近满
+（40+ GB）—— 这是 WDDM 显存超限降级。
+
+### 修复 1：`pinned()` 加 OOM 降级
+
+```python
+def pinned(tensor, pin):
+    if not pin:
+        return tensor.contiguous()
+    try:
+        out = torch.empty(tensor.shape, dtype=tensor.dtype, pin_memory=True)
+        return out.copy_(tensor)
+    except (RuntimeError, torch.cuda.OutOfMemoryError) as exc:
+        if "out of memory" in str(exc).lower():
+            logging.warning("锁页内存分配失败，退回普通内存（慢一些但不崩）")
+            torch.cuda.empty_cache()
+            return tensor.contiguous()   # 降级
+        raise
+```
+
+以前是**直接崩**，现在会**降级继续跑**。
+
+### 修复 2：一键端加单实例保证
+
+启动器现在会：
+1. **检查 8188 端口** —— 已有实例就直接开浏览器，不再启动第二个
+2. **清理残留进程** —— 端口空闲但有僵尸 python 进程时先清掉
+3. **报告显存状态** —— 空闲 < 8 GB 时提示，但不阻止启动
+
+这样根本不会出现「两个实例抢显存」的情况。
+
+### 实测
+
+| 场景 | 结果 |
+|---|---|
+| 首次启动 | ✅ 2 个进程（主+worker），显存 13.7 GB 空闲 |
+| 服务在跑时再点一次 | ✅ 只开浏览器，进程数不变 |
+| 完整工作流第 1 次 | ✅ 40.1 s |
+| 完整工作流第 2 次 | ✅ 16.0 s |
+
+### 用户侧怎么判断
+
+**不用看任务管理器。** 启动器会直接打印：
+
+```
+显存就绪：空闲 13773 MiB
+```
+
+或者
+
+```
+[提示] 显存只剩 6000 MiB，可能是别的程序占着（浏览器/游戏/其他AI）。
+       生成会自动降级（慢一些），但不会崩。
+```

@@ -495,3 +495,75 @@ keeps its selection even when blurred.
 | Scoped tag | `这是一<whisper>句悄</whisper>悄话。` OK, wrapped exactly the 2 selected chars |
 | Mood | `[愤怒] 第二行台词。` OK, jumped to line start |
 | Pinyin | `<|phoneme_start|>zhong4<|phoneme_end|>...` OK |
+---
+
+## v8: Stability fixes
+
+### The problem: "GPU out of memory" during generation
+
+```
+torch.AcceleratorError: CUDA error: out of memory
+  load_drama3 → add_from_tensors → pinned()
+                              → torch.empty(pin_memory=True)
+```
+
+**The crash is in model loading, not inference.** `pin_memory=True` asks CUDA for a
+pinned pool, and when another process holds VRAM it raises OOM and the whole load dies.
+
+### Root cause: ComfyUI has no single-instance lock
+
+Launching repeatedly starts several instances at once; each tries to fill VRAM and they
+fight. Symptom (without opening Task Manager): dedicated VRAM stays low (2–3 GB) while
+shared VRAM climbs to ~40+ GB — WDDM demoting allocations past the limit.
+
+### Fix 1: OOM fallback in `pinned()`
+
+```python
+def pinned(tensor, pin):
+    if not pin:
+        return tensor.contiguous()
+    try:
+        out = torch.empty(tensor.shape, dtype=tensor.dtype, pin_memory=True)
+        return out.copy_(tensor)
+    except (RuntimeError, torch.cuda.OutOfMemoryError) as exc:
+        if "out of memory" in str(exc).lower():
+            logging.warning("Pinned allocation failed; falling back to plain memory")
+            torch.cuda.empty_cache()
+            return tensor.contiguous()   # degraded but alive
+        raise
+```
+
+Previously it **crashed**; now it **degrades and keeps running**.
+
+### Fix 2: single-instance guarantee in the launcher
+
+The launcher now:
+1. **Checks port 8188** — an existing instance just opens the browser, no second launch
+2. **Clears stale processes** — kills zombie `main.py` pythons so they cannot hold VRAM
+3. **Reports VRAM** — warns below 8 GB free but never blocks startup
+
+Two instances fighting over VRAM can no longer happen.
+
+### Measured
+
+| Scenario | Result |
+|---|---|
+| First launch | OK, 2 processes (main + worker), 13.7 GB VRAM free |
+| Click again while running | Opens the browser only, process count unchanged |
+| Full workflow, run 1 | OK, 40.1 s |
+| Full workflow, run 2 | OK, 16.0 s |
+
+### What the user sees
+
+No Task Manager needed — the launcher prints:
+
+```
+显存就绪：空闲 13773 MiB
+```
+
+or
+
+```
+[提示] 显存只剩 6000 MiB，可能是别的程序占着（浏览器/游戏/其他AI）。
+       生成会自动降级（慢一些），但不会崩。
+```
